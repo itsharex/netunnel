@@ -69,13 +69,29 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bundles-${{ matrix.platform }}
-          path: src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*
+          path: |
+            src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.msi
+            src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.msi.sig
+            src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*setup*.exe
+            src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.exe.sig
+            src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.dmg
+            src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.dmg.sig
+            src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.deb
+            src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.deb.sig
+            src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.rpm
+            src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.rpm.sig
+            src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.AppImage
+            src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.AppImage.sig
+            src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.tar.gz
+            src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.tar.gz.sig
 
   release:
     needs: build
     permissions:
       contents: write
     runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
