@@ -1,0 +1,11 @@
+2026/03/21 00:17:16 netunnel-server connected to postgres and applied migrations
+2026/03/21 00:17:16 database target: postgresql://ai_ssh_user:xxxxx@127.0.0.1:5432/netunnel
+2026/03/21 00:17:16 migrations dir: ..\..\sql
+2026/03/21 00:17:16 listen addr: :40261
+2026/03/21 00:17:16 http api listening on :40261
+2026/03/21 00:17:36 http GET /healthz 586.6µs
+2026/03/21 00:17:44 http POST /api/v1/dev/bootstrap-user 8.9473ms
+2026/03/21 00:17:53 http POST /api/v1/agents/register 9.1488ms
+2026/03/21 00:18:04 http POST /api/v1/tunnels/tcp 10.2841ms
+2026/03/21 00:18:17 http POST /api/v1/agents/config 12.5393ms
+2026/03/21 00:18:17 http GET /api/v1/tunnels 4.2119ms

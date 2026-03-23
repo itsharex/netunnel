@@ -1,0 +1,7 @@
+public_host: 127.0.0.1
+public_api_base_url: http://127.0.0.1:40061
+host_domain_suffix: localtest.me
+
+tcp_port_ranges:
+  - start: 50000
+    end: 60000

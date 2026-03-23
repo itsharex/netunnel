@@ -1,0 +1,7 @@
+2026/03/21 00:23:07 agent registered: id=6bef76c0-2f6e-4a5f-852a-d59680e3ff96 created=false machine_code=machine-002
+2026/03/21 00:23:07 config synced: agent=6bef76c0-2f6e-4a5f-852a-d59680e3ff96 tunnels=1
+2026/03/21 00:23:07 tunnel loaded: id=91b4dc83-f014-46f0-8b3d-36e81b4c13e6 type=tcp local=127.0.0.1:22 remote_port=41022 enabled=true
+2026/03/21 00:23:09 config synced: agent=6bef76c0-2f6e-4a5f-852a-d59680e3ff96 tunnels=1
+2026/03/21 00:23:09 tunnel loaded: id=91b4dc83-f014-46f0-8b3d-36e81b4c13e6 type=tcp local=127.0.0.1:22 remote_port=41022 enabled=true
+2026/03/21 00:23:11 config synced: agent=6bef76c0-2f6e-4a5f-852a-d59680e3ff96 tunnels=1
+2026/03/21 00:23:11 tunnel loaded: id=91b4dc83-f014-46f0-8b3d-36e81b4c13e6 type=tcp local=127.0.0.1:22 remote_port=41022 enabled=true

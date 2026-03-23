@@ -1,0 +1,28 @@
+root = "."
+tmp_dir = ".air"
+
+[build]
+cmd = "go build -buildvcs=false -o ./.air/server-run.exe ./cmd/server"
+bin = ".\\.air\\server-run.exe"
+full_bin = ".\\.air\\server-run.exe"
+entrypoint = ".\\.air\\server-run.exe"
+include_ext = ["go", "yaml", "yml", "sql"]
+exclude_dir = [".air", ".gocache"]
+exclude_file = [
+  "server.40061.out.log",
+  "server.40061.err.log",
+  "server.40361.out.log",
+  "server.40361.err.log",
+  "server.40461.out.log",
+  "server.40461.err.log"
+]
+delay = 1000
+stop_on_error = true
+send_interrupt = true
+kill_delay = "2s"
+
+[log]
+time = true
+
+[screen]
+clear_on_rebuild = false
