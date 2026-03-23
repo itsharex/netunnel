@@ -5,11 +5,7 @@ on:
     branches:
       - main
     paths:
-      - "src/**"
-      - "src-tauri/**"
-      - "tests/**"
-      - "pnpm-lock.yaml"
-      - "src-tauri/Cargo.lock"
+      - "src/netunnel-desktop-tauri/**"
       - ".github/workflows/test-build.yml"
   pull_request:
   workflow_dispatch:
@@ -48,4 +44,4 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Build Tauri
-        run: pnpm tauri build
+        run: cd src/netunnel-desktop-tauri && pnpm tauri build
