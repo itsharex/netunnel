@@ -11,6 +11,7 @@ import { version as pkgVersion } from './package.json'
 
 const HOST = process.env.TAURI_DEV_HOST
 const PLATFORM = process.env.TAURI_ENV_PLATFORM
+const ENV_DIR = fileURLToPath(new URL('.', import.meta.url))
 process.env.VITE_APP_VERSION = pkgVersion
 if (process.env.NODE_ENV === 'production') {
   process.env.VITE_APP_BUILD_EPOCH = new Date().getTime().toString()
@@ -49,6 +50,7 @@ export default defineConfig({
     preprocessorMaxWorkers: true,
   },
 
+  envDir: ENV_DIR,
   clearScreen: false,
   envPrefix: ['VITE_', 'TAURI_'],
   server: {

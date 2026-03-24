@@ -37,16 +37,19 @@ jobs:
       - name: Install pnpm + deps
         uses: pnpm/action-setup@v4.2.0
         with:
+          version: 10
           run_install: false
-
-      - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
 
       - name: Use Node.js
         uses: actions/setup-node@v6.2.0
         with:
           node-version: 24
           cache: "pnpm"
+          cache-dependency-path: src/netunnel-desktop-tauri/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: src/netunnel-desktop-tauri
+        run: pnpm install --no-frozen-lockfile
 
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -60,7 +63,8 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Build Tauri
-        run: cd src/netunnel-desktop-tauri && pnpm exec tauri build --config src-tauri/tauri.updater.conf.json ${{ matrix.args }}
+        working-directory: src/netunnel-desktop-tauri
+        run: pnpm exec tauri build --config src-tauri/tauri.updater.conf.json ${{ matrix.args }}
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
