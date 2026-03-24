@@ -93,8 +93,59 @@ const versionString =
 const AUTO_UPDATE_INTERVAL_MS = 2 * 60 * 60 * 1000
 const SETTINGS_STORAGE_KEY = 'netunnel-desktop-tauri-settings'
 const SESSION_STORAGE_KEY = 'netunnel-desktop-tauri-session'
-const LEGACY_LOCAL_HOME_URL = 'http://127.0.0.1:40061'
-const LEGACY_LOCAL_BRIDGE_ADDR = '127.0.0.1:40062'
+
+function isLegacyLocalHomeUrl(value: unknown) {
+  if (typeof value !== 'string') {
+    return false
+  }
+
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return false
+  }
+
+  if (trimmed === '127.0.0.1:40061' || trimmed === 'localhost:40061') {
+    return true
+  }
+
+  try {
+    const normalized = trimmed.includes('://') ? trimmed : `http://${trimmed}`
+    const parsed = new URL(normalized)
+    return (
+      (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') &&
+      parsed.port === '40061'
+    )
+  } catch {
+    return false
+  }
+}
+
+function isLegacyLocalBridgeAddr(value: unknown) {
+  if (typeof value !== 'string') {
+    return false
+  }
+
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return false
+  }
+
+  return trimmed === '127.0.0.1:40062' || trimmed === 'localhost:40062'
+}
+
+function migrateProductionHomeUrl(value: unknown) {
+  if (import.meta.env.MODE === 'production' && isLegacyLocalHomeUrl(value)) {
+    return runtimeEnv.defaultHomeUrl
+  }
+  return typeof value === 'string' ? value : undefined
+}
+
+function migrateProductionBridgeAddr(value: unknown) {
+  if (import.meta.env.MODE === 'production' && isLegacyLocalBridgeAddr(value)) {
+    return runtimeEnv.defaultBridgeAddr
+  }
+  return typeof value === 'string' ? value : undefined
+}
 
 let autoUpdateTimer: ReturnType<typeof setInterval> | null = null
 
@@ -145,14 +196,8 @@ function loadPersistedSettings(): Partial<SettingsState> {
 }
 
 const persistedSettings = loadPersistedSettings()
-const persistedHomeUrl =
-  import.meta.env.MODE === 'production' && persistedSettings.homeUrl === LEGACY_LOCAL_HOME_URL
-    ? runtimeEnv.defaultHomeUrl
-    : persistedSettings.homeUrl
-const persistedBridgeAddr =
-  import.meta.env.MODE === 'production' && persistedSettings.bridgeAddr === LEGACY_LOCAL_BRIDGE_ADDR
-    ? runtimeEnv.defaultBridgeAddr
-    : persistedSettings.bridgeAddr
+const persistedHomeUrl = migrateProductionHomeUrl(persistedSettings.homeUrl)
+const persistedBridgeAddr = migrateProductionBridgeAddr(persistedSettings.bridgeAddr)
 
 function loadPersistedSession(): Partial<AuthSessionState> & { isAuthenticated?: boolean } {
   if (typeof window === 'undefined') {
@@ -171,10 +216,7 @@ function loadPersistedSession(): Partial<AuthSessionState> & { isAuthenticated?:
 }
 
 const persistedSession = loadPersistedSession()
-const persistedSessionBaseUrl =
-  import.meta.env.MODE === 'production' && persistedSession.baseUrl === LEGACY_LOCAL_HOME_URL
-    ? runtimeEnv.defaultHomeUrl
-    : persistedSession.baseUrl
+const persistedSessionBaseUrl = migrateProductionHomeUrl(persistedSession.baseUrl)
 
 export const useStore = defineStore('main', {
   state: () => ({
@@ -276,6 +318,17 @@ export const useStore = defineStore('main', {
       this.isInitialized = true
       if (!this.session.baseUrl) {
         this.session.baseUrl = this.settings.homeUrl
+      }
+      if (import.meta.env.MODE === 'production') {
+        if (isLegacyLocalHomeUrl(this.session.baseUrl)) {
+          this.session.baseUrl = runtimeEnv.defaultHomeUrl
+        }
+        if (isLegacyLocalHomeUrl(this.settings.homeUrl)) {
+          this.settings.homeUrl = runtimeEnv.defaultHomeUrl
+        }
+        if (isLegacyLocalBridgeAddr(this.settings.bridgeAddr)) {
+          this.settings.bridgeAddr = runtimeEnv.defaultBridgeAddr
+        }
       }
       this.persistSettings()
       this.persistSession()
