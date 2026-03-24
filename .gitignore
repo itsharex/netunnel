@@ -49,6 +49,8 @@ src/netunnel-desktop/
 .env
 .env.*
 !.env.example
+!src/netunnel-desktop-tauri/.env.development
+!src/netunnel-desktop-tauri/.env.production
 
 # AI conversation logs (personal)
 messages/
