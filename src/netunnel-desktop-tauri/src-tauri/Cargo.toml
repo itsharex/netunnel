@@ -1,6 +1,6 @@
 [package]
 name = "netunnel"
-version = "2.10.5"
+version = "2.10.6"
 description = "Netunnel Desktop"
 authors = ["you"]
 edition = "2021"
