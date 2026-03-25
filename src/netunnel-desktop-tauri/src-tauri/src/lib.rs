@@ -185,16 +185,33 @@ fn open_in_file_manager(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn updater_public_key() -> Option<&'static str> {
-    option_env!("TAURI_UPDATER_PUBLIC_KEY")
+fn updater_config() -> Result<serde_json::Value, String> {
+    serde_json::from_str(include_str!("../tauri.conf.json"))
+        .map_err(|error| format!("读取 tauri.conf.json 的 updater 配置失败: {}", error))
+}
+
+fn updater_public_key() -> Option<String> {
+    let config = updater_config().ok()?;
+    config
+        .pointer("/plugins/updater/pubkey")
+        .and_then(|value| value.as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn updater_endpoints() -> Vec<String> {
-    option_env!("TAURI_UPDATER_ENDPOINTS")
-        .map(|raw| {
-            raw.split(['\n', '\r', ';'])
+    let Ok(config) = updater_config() else {
+        return Vec::new();
+    };
+
+    config
+        .pointer("/plugins/updater/endpoints")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
@@ -211,12 +228,16 @@ fn parsed_updater_endpoints() -> Result<Vec<Url>, String> {
 }
 
 fn updater_disabled_reason() -> Option<String> {
+    if let Err(error) = updater_config() {
+        return Some(error);
+    }
+
     if updater_public_key().is_none() {
-        return Some("未配置更新公钥，应用内更新已禁用。".into());
+        return Some("tauri.conf.json 未配置 updater pubkey，应用内更新已禁用。".into());
     }
 
     if updater_endpoints().is_empty() {
-        return Some("未配置更新地址，应用内更新已禁用。".into());
+        return Some("tauri.conf.json 未配置 updater endpoints，应用内更新已禁用。".into());
     }
 
     None
@@ -816,16 +837,16 @@ async fn check_for_update(
     logger.write("INFO", "开始检查更新");
 
     let pubkey = updater_public_key()
-        .ok_or_else(|| "未配置更新公钥，请先设置 TAURI_UPDATER_PUBLIC_KEY。".to_string())?;
+        .ok_or_else(|| "未配置更新公钥，请先在 tauri.conf.json 的 plugins.updater.pubkey 中设置。".to_string())?;
     let endpoints = parsed_updater_endpoints()?;
 
     if endpoints.is_empty() {
-        return Err("未配置更新地址，请先设置 TAURI_UPDATER_ENDPOINTS。".into());
+        return Err("未配置更新地址，请先在 tauri.conf.json 的 plugins.updater.endpoints 中设置。".into());
     }
 
     let update = app
         .updater_builder()
-        .pubkey(pubkey)
+        .pubkey(&pubkey)
         .endpoints(endpoints)
         .map_err(|error| error.to_string())?
         .build()
