@@ -81,6 +81,7 @@ jobs:
         with:
           name: bundles-${{ matrix.platform }}
           path: |
+            src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.json
             src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.msi
             src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*.msi.sig
             src/netunnel-desktop-tauri/${{ matrix.target_path }}/**/*setup*.exe
