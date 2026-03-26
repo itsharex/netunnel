@@ -41,6 +41,26 @@ const assignSectionRef = (id: SectionId) => (element: Element | ComponentPublicI
   sectionRefs.value[id] = element as HTMLElement | null
 }
 
+const updaterProgressPercent = computed(() => store.updater.progressPercent ?? 0)
+
+const updaterProgressLabel = computed(() => {
+  if (!store.updater.installing) {
+    return ''
+  }
+
+  if (store.updater.progressPhase === 'installing') {
+    return '安装包下载完成，正在安装更新...'
+  }
+
+  if (store.updater.totalBytes && store.updater.totalBytes > 0) {
+    const downloaded = formatBytes(store.updater.downloadedBytes)
+    const total = formatBytes(store.updater.totalBytes)
+    return `正在下载更新 ${updaterProgressPercent.value}% (${downloaded} / ${total})`
+  }
+
+  return `正在下载更新 ${formatBytes(store.updater.downloadedBytes)}`
+})
+
 const updaterDescription = computed(() => {
   if (store.updater.installing) {
     return '正在下载并安装更新，请稍候。安装完成后应用会自动重启。'
@@ -92,6 +112,24 @@ const handleUpdaterAction = async () => {
   }
 
   await store.checkForUpdates()
+}
+
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return '0 B'
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB']
+  let size = value
+  let unitIndex = 0
+
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024
+    unitIndex += 1
+  }
+
+  const digits = unitIndex === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2
+  return `${size.toFixed(digits)} ${units[unitIndex]}`
 }
 
 const syncActiveSection = () => {
@@ -214,6 +252,17 @@ onMounted(() => {
                   <p v-if="store.updater.available?.body" class="rounded-2xl bg-[var(--surface-secondary)] px-4 py-3 text-sm leading-6 text-[var(--text-soft)]">
                     {{ store.updater.available.body }}
                   </p>
+                  <div v-if="store.updater.installing" class="space-y-2 rounded-2xl bg-[var(--surface-secondary)] px-4 py-3">
+                    <div class="h-2 overflow-hidden rounded-full bg-black/6">
+                      <div
+                        class="h-full rounded-full bg-[var(--brand)] transition-[width] duration-300 ease-out"
+                        :style="{ width: `${updaterProgressPercent}%` }"
+                      ></div>
+                    </div>
+                    <p class="text-sm leading-6 text-[var(--text-soft)]">
+                      {{ updaterProgressLabel }}
+                    </p>
+                  </div>
                 </div>
 
                 <button

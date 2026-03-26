@@ -5,7 +5,7 @@ use std::{
     net::{TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus},
-    sync::Mutex,
+    sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -15,7 +15,7 @@ use sysinfo::{Pid, ProcessesToUpdate, Signal, System};
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::TrayIconBuilder,
-    Manager, Url,
+    Emitter, Manager, Url,
 };
 
 #[cfg(desktop)]
@@ -63,6 +63,7 @@ struct AppLogger {
 }
 
 const GITHUB_RELEASE_ACCELERATOR_PREFIX: &str = "https://git.aifuqiang.win/";
+const UPDATER_PROGRESS_EVENT: &str = "updater://progress";
 
 impl AppLogger {
     fn new(log_dir: PathBuf) -> Result<Self, String> {
@@ -126,6 +127,15 @@ struct UpdatePayload {
 struct LogStatus {
     directory: String,
     file_path: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateProgressPayload {
+    phase: String,
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+    percent: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -427,6 +437,10 @@ fn show_main_window(app: &tauri::AppHandle) -> Result<(), String> {
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())?;
     Ok(())
+}
+
+fn emit_update_progress(app: &tauri::AppHandle, payload: UpdateProgressPayload) {
+    let _ = app.emit(UPDATER_PROGRESS_EVENT, payload);
 }
 
 fn hide_main_window(app: &tauri::AppHandle) -> Result<(), String> {
@@ -973,8 +987,52 @@ async fn install_update(
         message
     })?;
 
+    emit_update_progress(
+        &app,
+        UpdateProgressPayload {
+            phase: "downloading".to_string(),
+            downloaded_bytes: 0,
+            total_bytes: None,
+            percent: Some(0.0),
+        },
+    );
+
+    let downloaded_bytes = Arc::new(AtomicU64::new(0));
+    let progress_downloaded_bytes = Arc::clone(&downloaded_bytes);
+    let finish_downloaded_bytes = Arc::clone(&downloaded_bytes);
     update
-        .download_and_install(|_chunk_length, _content_length| {}, || {})
+        .download_and_install(
+            |chunk_length, content_length| {
+                let downloaded_bytes =
+                    progress_downloaded_bytes.fetch_add(chunk_length as u64, Ordering::Relaxed) + chunk_length as u64;
+                let percent = content_length
+                    .filter(|total| *total > 0)
+                    .map(|total| (downloaded_bytes as f64 / total as f64) * 100.0)
+                    .map(|value| value.clamp(0.0, 100.0));
+
+                emit_update_progress(
+                    &app,
+                    UpdateProgressPayload {
+                        phase: "downloading".to_string(),
+                        downloaded_bytes,
+                        total_bytes: content_length,
+                        percent,
+                    },
+                );
+            },
+            || {
+                let downloaded_bytes = finish_downloaded_bytes.load(Ordering::Relaxed);
+                emit_update_progress(
+                    &app,
+                    UpdateProgressPayload {
+                        phase: "installing".to_string(),
+                        downloaded_bytes,
+                        total_bytes: Some(downloaded_bytes),
+                        percent: Some(100.0),
+                    },
+                );
+            },
+        )
         .await
         .map_err(|error| {
             let message = error.to_string();

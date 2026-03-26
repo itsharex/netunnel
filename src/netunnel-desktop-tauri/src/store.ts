@@ -1,4 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { acceptHMRUpdate, defineStore } from 'pinia'
 import { runtimeEnv } from '@/config/env'
 import { completeWechatBusinessLogin, loginWithNetunnel } from '@/services/auth'
@@ -71,10 +72,21 @@ interface UpdaterState {
   endpoints: string[]
   checking: boolean
   installing: boolean
+  progressPhase: 'idle' | 'downloading' | 'installing'
+  downloadedBytes: number
+  totalBytes: number | null
+  progressPercent: number | null
   available: UpdatePayload | null
   lastCheckedAt: string | null
   lastError: string | null
   promptVisible: boolean
+}
+
+interface UpdateProgressPayload {
+  phase: 'downloading' | 'installing'
+  downloadedBytes: number
+  totalBytes: number | null
+  percent: number | null
 }
 
 interface LogStatusPayload {
@@ -148,6 +160,7 @@ function migrateProductionBridgeAddr(value: unknown) {
 }
 
 let autoUpdateTimer: ReturnType<typeof setInterval> | null = null
+let updaterProgressUnlisten: UnlistenFn | null = null
 
 const basePanels: BrowserPanel[] = [
   {
@@ -268,6 +281,10 @@ export const useStore = defineStore('main', {
       endpoints: [],
       checking: false,
       installing: false,
+      progressPhase: 'idle',
+      downloadedBytes: 0,
+      totalBytes: null,
+      progressPercent: null,
       available: null,
       lastCheckedAt: null,
       lastError: null,
@@ -332,6 +349,7 @@ export const useStore = defineStore('main', {
       }
       this.persistSettings()
       this.persistSession()
+      void this.setupUpdaterProgressListener()
       void this.loadUpdaterStatus()
       void this.loadLogStatus()
     },
@@ -568,13 +586,34 @@ export const useStore = defineStore('main', {
 
       this.updater.installing = true
       this.updater.lastError = null
+      this.resetUpdaterProgress()
 
       try {
         await invoke('install_update')
       } catch (error) {
         this.updater.lastError = String(error)
         this.updater.installing = false
+        this.updater.progressPhase = 'idle'
       }
+    },
+    resetUpdaterProgress() {
+      this.updater.progressPhase = 'idle'
+      this.updater.downloadedBytes = 0
+      this.updater.totalBytes = null
+      this.updater.progressPercent = null
+    },
+    async setupUpdaterProgressListener() {
+      if (!isTauri() || updaterProgressUnlisten) {
+        return
+      }
+
+      updaterProgressUnlisten = await listen<UpdateProgressPayload>('updater://progress', (event) => {
+        const payload = event.payload
+        this.updater.progressPhase = payload.phase
+        this.updater.downloadedBytes = payload.downloadedBytes
+        this.updater.totalBytes = payload.totalBytes
+        this.updater.progressPercent = payload.percent === null ? null : Math.round(payload.percent)
+      })
     },
     dismissUpdatePrompt() {
       this.updater.promptVisible = false
