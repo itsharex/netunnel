@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Netunnel Desktop",
-  "version": "2.12.3",
+  "version": "2.12.4",
   "identifier": "com.netunnel.desktop",
   "build": {
     "beforeDevCommand": "pnpm build:agent && pnpm dev",
