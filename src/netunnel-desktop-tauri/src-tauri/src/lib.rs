@@ -62,6 +62,8 @@ struct AppLogger {
     file: Mutex<File>,
 }
 
+const GITHUB_RELEASE_ACCELERATOR_PREFIX: &str = "https://git.aifuqiang.win/";
+
 impl AppLogger {
     fn new(log_dir: PathBuf) -> Result<Self, String> {
         fs::create_dir_all(&log_dir).map_err(|error| error.to_string())?;
@@ -225,6 +227,20 @@ fn parsed_updater_endpoints() -> Result<Vec<Url>, String> {
         .into_iter()
         .map(|endpoint| Url::parse(&endpoint).map_err(|error| error.to_string()))
         .collect()
+}
+
+fn rewrite_release_url_for_accelerator(url: &Url) -> Result<Url, String> {
+    let raw = url.as_str();
+    if raw.starts_with(GITHUB_RELEASE_ACCELERATOR_PREFIX) {
+        return Ok(url.clone());
+    }
+
+    if raw.starts_with("https://github.com/") {
+        let accelerated = format!("{GITHUB_RELEASE_ACCELERATOR_PREFIX}{raw}");
+        return Url::parse(&accelerated).map_err(|error| error.to_string());
+    }
+
+    Ok(url.clone())
 }
 
 fn updater_disabled_reason() -> Option<String> {
@@ -879,6 +895,23 @@ async fn check_for_update(
             message
         })?;
 
+    let update = update
+        .map(|mut update| {
+            if let Ok(rewritten) = rewrite_release_url_for_accelerator(&update.download_url) {
+                if rewritten != update.download_url {
+                    logger.write(
+                        "INFO",
+                        format!(
+                            "更新包下载地址已切换到加速源: {} -> {}",
+                            update.download_url, rewritten
+                        ),
+                    );
+                    update.download_url = rewritten;
+                }
+            }
+            update
+        });
+
     let payload = update.as_ref().map(|update| UpdatePayload {
         version: update.version.to_string(),
         current_version: update.current_version.to_string(),
@@ -911,6 +944,7 @@ async fn check_for_update(
 async fn install_update(
     app: tauri::AppHandle,
     pending_update: tauri::State<'_, PendingUpdate>,
+    runtime: tauri::State<'_, AgentRuntime>,
 ) -> Result<(), String> {
     let logger = app.state::<AppLogger>();
     let update = {
@@ -931,6 +965,13 @@ async fn install_update(
             update.current_version, update.version
         ),
     );
+
+    logger.write("INFO", "安装更新前停止本地 agent，避免占用 agent-run.exe");
+    stop_agent_runtime_internal(&app, &logger, &runtime).map_err(|error| {
+        let message = format!("安装更新前停止本地 agent 失败: {error}");
+        logger.write("ERROR", message.clone());
+        message
+    })?;
 
     update
         .download_and_install(|_chunk_length, _content_length| {}, || {})

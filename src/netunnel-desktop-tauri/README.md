@@ -102,7 +102,7 @@ pnpm tauri signer generate
 发布工作流会自动把更新地址设置成当前仓库的 GitHub Releases 最新下载地址：
 
 ```text
-https://github.com/<owner>/<repo>/releases/latest/download/latest.json
+https://git.aifuqiang.win/https://github.com/<owner>/<repo>/releases/latest/download/latest.json
 ```
 
 ## 项目结构
