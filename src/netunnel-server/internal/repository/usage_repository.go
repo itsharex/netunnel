@@ -39,9 +39,25 @@ returning id`
 }
 
 func (r *UsageRepository) FinishTunnelConnection(ctx context.Context, params domain.TunnelConnectionFinish) error {
+	return r.updateTunnelConnectionUsage(ctx, domain.TunnelConnectionProgress{
+		ConnectionID: params.ConnectionID,
+		UserID:       params.UserID,
+		AgentID:      params.AgentID,
+		TunnelID:     params.TunnelID,
+		IngressBytes: params.IngressBytes,
+		EgressBytes:  params.EgressBytes,
+		Status:       params.Status,
+	}, true)
+}
+
+func (r *UsageRepository) UpdateTunnelConnectionProgress(ctx context.Context, params domain.TunnelConnectionProgress) error {
+	return r.updateTunnelConnectionUsage(ctx, params, false)
+}
+
+func (r *UsageRepository) updateTunnelConnectionUsage(ctx context.Context, params domain.TunnelConnectionProgress, finalize bool) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin finish tunnel connection tx: %w", err)
+		return fmt.Errorf("begin tunnel connection usage tx: %w", err)
 	}
 	defer func() {
 		if err != nil {
@@ -49,9 +65,38 @@ func (r *UsageRepository) FinishTunnelConnection(ctx context.Context, params dom
 		}
 	}()
 
-	totalBytes := params.IngressBytes + params.EgressBytes
+	const loadConnection = `
+select ingress_bytes, egress_bytes
+from tunnel_connections
+where id = $1
+for update`
 
-	const updateConnection = `
+	var previousIngressBytes int64
+	var previousEgressBytes int64
+	if err = tx.QueryRowContext(ctx, loadConnection, params.ConnectionID).Scan(&previousIngressBytes, &previousEgressBytes); err != nil {
+		return fmt.Errorf("load tunnel connection usage: %w", err)
+	}
+
+	totalBytes := params.IngressBytes + params.EgressBytes
+	deltaIngressBytes := params.IngressBytes - previousIngressBytes
+	deltaEgressBytes := params.EgressBytes - previousEgressBytes
+	if deltaIngressBytes < 0 {
+		deltaIngressBytes = 0
+	}
+	if deltaEgressBytes < 0 {
+		deltaEgressBytes = 0
+	}
+	deltaTotalBytes := deltaIngressBytes + deltaEgressBytes
+
+	updateConnection := `
+update tunnel_connections
+set ingress_bytes = $2,
+    egress_bytes = $3,
+    total_bytes = $4,
+    status = $5
+where id = $1`
+	if finalize {
+		updateConnection = `
 update tunnel_connections
 set ended_at = now(),
     ingress_bytes = $2,
@@ -59,6 +104,7 @@ set ended_at = now(),
     total_bytes = $4,
     status = $5
 where id = $1`
+	}
 
 	if _, err = tx.ExecContext(
 		ctx,
@@ -81,33 +127,50 @@ set ingress_bytes = traffic_usages.ingress_bytes + excluded.ingress_bytes,
     total_bytes = traffic_usages.total_bytes + excluded.total_bytes,
     updated_at = now()`
 
-	if _, err = tx.ExecContext(
-		ctx,
-		upsertUsage,
-		params.UserID,
-		params.AgentID,
-		params.TunnelID,
-		params.IngressBytes,
-		params.EgressBytes,
-		totalBytes,
-	); err != nil {
-		return fmt.Errorf("upsert traffic usage: %w", err)
+	if deltaTotalBytes > 0 {
+		if _, err = tx.ExecContext(
+			ctx,
+			upsertUsage,
+			params.UserID,
+			params.AgentID,
+			params.TunnelID,
+			deltaIngressBytes,
+			deltaEgressBytes,
+			deltaTotalBytes,
+		); err != nil {
+			return fmt.Errorf("upsert traffic usage: %w", err)
+		}
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("commit finish tunnel connection tx: %w", err)
+		return fmt.Errorf("commit tunnel connection usage tx: %w", err)
 	}
 
-	log.Printf(
-		"usage upsert complete: user=%s tunnel=%s agent=%s ingress=%d egress=%d total=%d status=%s",
-		params.UserID,
-		params.TunnelID,
-		params.AgentID,
-		params.IngressBytes,
-		params.EgressBytes,
-		totalBytes,
-		params.Status,
-	)
+	if finalize {
+		log.Printf(
+			"usage finalize complete: user=%s tunnel=%s agent=%s ingress=%d egress=%d total=%d delta_total=%d status=%s",
+			params.UserID,
+			params.TunnelID,
+			params.AgentID,
+			params.IngressBytes,
+			params.EgressBytes,
+			totalBytes,
+			deltaTotalBytes,
+			params.Status,
+		)
+	} else if deltaTotalBytes > 0 {
+		log.Printf(
+			"usage progress update: user=%s tunnel=%s agent=%s ingress=%d egress=%d total=%d delta_total=%d status=%s",
+			params.UserID,
+			params.TunnelID,
+			params.AgentID,
+			params.IngressBytes,
+			params.EgressBytes,
+			totalBytes,
+			deltaTotalBytes,
+			params.Status,
+		)
+	}
 	return nil
 }
 

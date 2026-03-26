@@ -76,6 +76,16 @@ type TunnelConnectionFinish struct {
 	Status       string
 }
 
+type TunnelConnectionProgress struct {
+	ConnectionID string
+	UserID       string
+	AgentID      string
+	TunnelID     string
+	IngressBytes int64
+	EgressBytes  int64
+	Status       string
+}
+
 type TunnelConnection struct {
 	ID           string     `json:"id"`
 	UserID       string     `json:"user_id"`

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"time"
 
@@ -11,9 +12,10 @@ import (
 )
 
 type App struct {
-	cfg     config.Config
-	client  *control.Client
-	forward *forwarder.BridgeManager
+	cfg                config.Config
+	client             *control.Client
+	forward            *forwarder.BridgeManager
+	lastConfigSnapshot string
 }
 
 func Bootstrap(cfg config.Config) (*App, error) {
@@ -69,17 +71,54 @@ func (a *App) syncOnce(ctx context.Context, agent control.Agent) error {
 		return err
 	}
 
-	log.Printf("config synced: agent=%s tunnels=%d", resp.Config.Agent.ID, len(resp.Config.Tunnels))
 	a.forward.Sync(ctx, resp.Config.Agent, resp.Config.Tunnels)
+
+	snapshotPayload := struct {
+		AgentID      string                              `json:"agent_id"`
+		Tunnels      []control.Tunnel                    `json:"tunnels"`
+		DomainRoutes map[string][]control.DomainRoute    `json:"domain_routes"`
+	}{
+		AgentID:      resp.Config.Agent.ID,
+		Tunnels:      resp.Config.Tunnels,
+		DomainRoutes: resp.Config.DomainRoutes,
+	}
+
+	snapshotBytes, err := json.Marshal(snapshotPayload)
+	if err != nil {
+		log.Printf("config synced: agent=%s tunnels=%d", resp.Config.Agent.ID, len(resp.Config.Tunnels))
+		return nil
+	}
+
+	snapshot := string(snapshotBytes)
+	if snapshot == a.lastConfigSnapshot {
+		return nil
+	}
+
+	a.lastConfigSnapshot = snapshot
+	log.Printf("config synced: agent=%s tunnels=%d", resp.Config.Agent.ID, len(resp.Config.Tunnels))
 	for _, tunnel := range resp.Config.Tunnels {
 		remotePort := 0
 		if tunnel.RemotePort != nil {
 			remotePort = *tunnel.RemotePort
 		}
-		log.Printf("tunnel loaded: id=%s type=%s local=%s:%d remote_port=%d enabled=%t", tunnel.ID, tunnel.Type, tunnel.LocalHost, tunnel.LocalPort, remotePort, tunnel.Enabled)
+		log.Printf(
+			"tunnel loaded: id=%s type=%s local=%s:%d remote_port=%d enabled=%t",
+			tunnel.ID,
+			tunnel.Type,
+			tunnel.LocalHost,
+			tunnel.LocalPort,
+			remotePort,
+			tunnel.Enabled,
+		)
 		if routes := resp.Config.DomainRoutes[tunnel.ID]; len(routes) > 0 {
 			for _, route := range routes {
-				log.Printf("domain route loaded: tunnel=%s domain=%s scheme=%s cert_source=%s", tunnel.ID, route.Domain, route.Scheme, route.CertSource)
+				log.Printf(
+					"domain route loaded: tunnel=%s domain=%s scheme=%s cert_source=%s",
+					tunnel.ID,
+					route.Domain,
+					route.Scheme,
+					route.CertSource,
+				)
 			}
 		}
 	}

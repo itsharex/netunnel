@@ -143,7 +143,7 @@ const fixedPricingPlans = computed<FixedPricingPlan[]>(() => [
   {
     key: 'traffic',
     title: '按流量充值',
-    description: '无到期时间，优先使用包年包月套餐。',
+    description: trafficPricingRule.value?.description || '无到期时间，优先使用包年包月套餐。',
     priceLabel: `${formatSingleDecimalAmount(trafficPricingRule.value?.price_per_gb || '1')} 元 / GB`,
     actionLabel: '快捷充值',
     current: billingProfile.value?.pricing_rule.billing_mode === 'traffic',
@@ -151,7 +151,7 @@ const fixedPricingPlans = computed<FixedPricingPlan[]>(() => [
   {
     key: 'month',
     title: '不限量包月',
-    description: '不限量包月套餐，固定 5 元。未到期续费，将会延长到期时间。',
+    description: monthlyPricingRule.value?.description || '不限量包月套餐，固定 5 元。未到期续费，将会延长到期时间。',
     priceLabel: monthlyPricingRule.value ? `${formatPricingAmount(monthlyPricingRule.value.subscription_price)} / 月` : '--',
     actionLabel: monthlyPricingRule.value ? '续费购买' : '暂不可用',
     rule: monthlyPricingRule.value,
@@ -160,7 +160,7 @@ const fixedPricingPlans = computed<FixedPricingPlan[]>(() => [
   {
     key: 'year',
     title: '不限量包年',
-    description: '不限量包年套餐，固定 40 元。未到期续费，将会延长到期时间。',
+    description: yearlyPricingRule.value?.description || '不限量包年套餐，固定 40 元。未到期续费，将会延长到期时间。',
     priceLabel: yearlyPricingRule.value ? `${formatPricingAmount(yearlyPricingRule.value.subscription_price)} / 年` : '--',
     actionLabel: yearlyPricingRule.value ? '续费购买' : '暂不可用',
     rule: yearlyPricingRule.value,

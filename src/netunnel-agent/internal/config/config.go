@@ -14,7 +14,7 @@ const (
 	defaultMachineCode  = "machine-local"
 	defaultClientVer    = "0.1.0"
 	defaultOSType       = "windows"
-	defaultSyncInterval = 10
+	defaultSyncInterval = 30
 )
 
 type Config struct {

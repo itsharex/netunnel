@@ -4,6 +4,8 @@ $serverDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $goCache = Join-Path $serverDir '.gocache'
 $windowsPowerShellDir = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0'
 $portsToFree = @(40061, 40062, 40063)
+$localConfigPath = Join-Path $serverDir 'config.local.yaml'
+$defaultConfigPath = Join-Path $serverDir 'config.yaml'
 
 if (-not (Test-Path $goCache)) {
   New-Item -ItemType Directory -Path $goCache | Out-Null
@@ -113,6 +115,18 @@ if (-not $air) {
 
 Push-Location $serverDir
 try {
+  if (-not $env:NETUNNEL_CONFIG) {
+    if (Test-Path $localConfigPath) {
+      $env:NETUNNEL_CONFIG = $localConfigPath
+      Write-Host "Using local config: $($env:NETUNNEL_CONFIG)"
+    } elseif (Test-Path $defaultConfigPath) {
+      $env:NETUNNEL_CONFIG = $defaultConfigPath
+      Write-Host "Using default config: $($env:NETUNNEL_CONFIG)"
+    }
+  } else {
+    Write-Host "Using NETUNNEL_CONFIG from environment: $($env:NETUNNEL_CONFIG)"
+  }
+
   Stop-ListenerProcesses -Ports $portsToFree
   $airPath = if ($air -is [System.Management.Automation.CommandInfo]) { $air.Source } else { $air.FullName }
   & $airPath -c .air.toml

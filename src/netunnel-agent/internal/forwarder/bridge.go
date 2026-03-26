@@ -34,11 +34,26 @@ type tunnelWorkerGroup struct {
 type BridgeManager struct {
 	bridgeAddr string
 
-	mu     sync.Mutex
+	mu sync.Mutex
+
 	groups map[string]*tunnelWorkerGroup
+
+	dialAttempts           uint64
+	dialFailures           uint64
+	helloFailures          uint64
+	activationWaitFailures uint64
+	localDialFailures      uint64
+	bridgeAttachSuccesses  uint64
+
+	summaryOnce sync.Once
 }
 
 const repeatedWorkerErrorLogInterval = 10 * time.Second
+const (
+	initialWorkerRetryDelay = 1 * time.Second
+	maxWorkerRetryDelay     = 30 * time.Second
+	bridgeSummaryInterval   = 1 * time.Minute
+)
 
 func NewBridgeManager(bridgeAddr string) *BridgeManager {
 	return &BridgeManager{
@@ -48,6 +63,10 @@ func NewBridgeManager(bridgeAddr string) *BridgeManager {
 }
 
 func (m *BridgeManager) Sync(ctx context.Context, agent control.Agent, tunnels []control.Tunnel) {
+	m.summaryOnce.Do(func() {
+		go m.logSummaries(ctx)
+	})
+
 	active := make(map[string]control.Tunnel)
 	for _, tunnel := range tunnels {
 		if (tunnel.Type != "tcp" && tunnel.Type != "http_host") || !tunnel.Enabled {
@@ -72,6 +91,50 @@ func (m *BridgeManager) Sync(ctx context.Context, agent control.Agent, tunnels [
 	for _, group := range stale {
 		group.cancel()
 	}
+}
+
+func (m *BridgeManager) logSummaries(ctx context.Context) {
+	ticker := time.NewTicker(bridgeSummaryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.logSummary()
+		}
+	}
+}
+
+func (m *BridgeManager) logSummary() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var totalPending, totalIdle, totalActive, failingGroups int
+	for _, group := range m.groups {
+		totalPending += group.pending
+		totalIdle += group.idle
+		totalActive += group.active
+		if group.lastError != "" {
+			failingGroups++
+		}
+	}
+
+	log.Printf(
+		"agent bridge summary: tunnels=%d pending=%d idle=%d active=%d failing=%d dial_attempts=%d dial_failures=%d hello_failures=%d activation_wait_failures=%d local_dial_failures=%d bridge_attached=%d",
+		len(m.groups),
+		totalPending,
+		totalIdle,
+		totalActive,
+		failingGroups,
+		m.dialAttempts,
+		m.dialFailures,
+		m.helloFailures,
+		m.activationWaitFailures,
+		m.localDialFailures,
+		m.bridgeAttachSuccesses,
+	)
 }
 
 func (m *BridgeManager) upsertGroup(ctx context.Context, agent control.Agent, tunnel control.Tunnel) {
@@ -166,6 +229,8 @@ func (m *BridgeManager) markActive(tunnelID string, delta int) bool {
 }
 
 func (m *BridgeManager) runWorker(ctx context.Context, agent control.Agent, tunnel control.Tunnel) {
+	retryDelay := initialWorkerRetryDelay
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -175,14 +240,23 @@ func (m *BridgeManager) runWorker(ctx context.Context, agent control.Agent, tunn
 
 		if err := m.bridgeOnce(ctx, agent, tunnel); err != nil {
 			m.logWorkerError(tunnel.ID, err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(retryDelay):
+			}
+			retryDelay *= 2
+			if retryDelay > maxWorkerRetryDelay {
+				retryDelay = maxWorkerRetryDelay
+			}
 		} else {
 			m.resetWorkerErrorState(tunnel.ID)
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(500 * time.Millisecond):
+			retryDelay = initialWorkerRetryDelay
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
 		}
 	}
 }
@@ -238,8 +312,15 @@ func (m *BridgeManager) resetWorkerErrorState(tunnelID string) {
 }
 
 func (m *BridgeManager) bridgeOnce(ctx context.Context, agent control.Agent, tunnel control.Tunnel) error {
+	m.mu.Lock()
+	m.dialAttempts++
+	m.mu.Unlock()
+
 	bridgeConn, err := net.DialTimeout("tcp", m.bridgeAddr, 10*time.Second)
 	if err != nil {
+		m.mu.Lock()
+		m.dialFailures++
+		m.mu.Unlock()
 		m.markPending(tunnel.ID, -1)
 		return fmt.Errorf("dial bridge: %w", err)
 	}
@@ -249,6 +330,9 @@ func (m *BridgeManager) bridgeOnce(ctx context.Context, agent control.Agent, tun
 		"tunnel_id":  tunnel.ID,
 		"secret_key": agent.SecretKey,
 	}); err != nil {
+		m.mu.Lock()
+		m.helloFailures++
+		m.mu.Unlock()
 		m.markPending(tunnel.ID, -1)
 		return fmt.Errorf("send bridge hello: %w", err)
 	}
@@ -261,6 +345,9 @@ func (m *BridgeManager) bridgeOnce(ctx context.Context, agent control.Agent, tun
 
 	activate := []byte{0}
 	if _, err := io.ReadFull(bridgeConn, activate); err != nil {
+		m.mu.Lock()
+		m.activationWaitFailures++
+		m.mu.Unlock()
 		return fmt.Errorf("wait bridge activation: %w", err)
 	}
 	if activate[0] != bridgeActivateByte {
@@ -287,10 +374,16 @@ func (m *BridgeManager) bridgeOnce(ctx context.Context, agent control.Agent, tun
 
 	localConn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", tunnel.LocalHost, tunnel.LocalPort), 10*time.Second)
 	if err != nil {
+		m.mu.Lock()
+		m.localDialFailures++
+		m.mu.Unlock()
 		return fmt.Errorf("dial local target: %w", err)
 	}
 	defer localConn.Close()
 
+	m.mu.Lock()
+	m.bridgeAttachSuccesses++
+	m.mu.Unlock()
 	log.Printf("bridge attached: tunnel=%s local=%s:%d", tunnel.ID, tunnel.LocalHost, tunnel.LocalPort)
 
 	errCh := make(chan error, 2)
