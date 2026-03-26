@@ -1,7 +1,7 @@
 {
   "name": "netunnel-desktop-tauri",
   "private": true,
-  "version": "2.11.9",
+  "version": "2.12.0",
   "type": "module",
   "scripts": {
     "dev": "cross-env DEBUG=0 vite",
