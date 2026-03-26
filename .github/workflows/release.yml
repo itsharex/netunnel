@@ -20,14 +20,18 @@ jobs:
         include:
           - platform: "macos-latest"
             args: "--target aarch64-apple-darwin"
+            go_target: "aarch64-apple-darwin"
           - platform: "ubuntu-24.04"
             args: ""
+            go_target: "x86_64-unknown-linux-gnu"
           - platform: "windows-latest"
             args: ""
+            go_target: "x86_64-pc-windows-msvc"
 
     runs-on: ${{ matrix.platform }}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      NETUNNEL_AGENT_TARGET: ${{ matrix.go_target }}
     steps:
       - uses: actions/checkout@v6.0.2
 
@@ -41,6 +45,11 @@ jobs:
         with:
           node-version: 24
           cache: "pnpm"
+
+      - name: Use Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: src/netunnel-agent/go.mod
 
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "cross-env DEBUG=0 vite",
     "test": "vitest",
+    "build:agent": "node ./scripts/build-agent.cjs",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "type-check": "vue-tsc --build --force",

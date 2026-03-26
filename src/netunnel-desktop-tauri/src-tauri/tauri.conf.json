@@ -4,9 +4,9 @@
   "version": "2.11.6",
   "identifier": "com.netunnel.desktop",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm build:agent && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm build:agent && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
