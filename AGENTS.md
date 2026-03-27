@@ -3,30 +3,48 @@
 ## 项目结构
 
 ```
-src/
-├── netunnel-desktop-tauri/   # Tauri 桌面端 (Vue 3 + Tailwind + Pinia + TypeScript)
-├── netunnel-server/          # Go 后端服务 (pgx/v5 + 标准库)
-├── netunnel-agent/           # Go Agent 客户端
-└── netunnel-desktop/         # 旧版前端原型 (废弃，勿用)
+netunnel/                          # pnpm workspace 根目录
+├── package.json                   # workspace 配置
+├── pnpm-workspace.yaml            # workspace 成员声明
+├── .github/
+│   └── workflows/
+│       └── release.yml            # GitHub 自动发布 workflow
+├── src/
+│   ├── netunnel-desktop-tauri/    # Tauri 桌面端 (Vue 3 + Tailwind + Pinia + TypeScript)
+│   ├── netunnel-server/          # Go 后端服务 (pgx/v5 + 标准库)
+│   └── netunnel-agent/           # Go Agent 客户端
+└── designs/                      # 设计资源
 ```
 
 ---
 
 ## 开发命令
 
-### Tauri 桌面端 (`src/netunnel-desktop-tauri/`)
+### pnpm workspace（根目录）
 
 | 命令 | 说明 |
 |------|------|
-| `pnpm dev` | 启动开发服务器 |
-| `pnpm build` | 类型检查 + 构建生产版本 |
-| `pnpm type-check` | TypeScript 类型检查 |
-| `pnpm test` | 运行所有测试 |
-| `pnpm test src/services/api.test.ts` | 运行单个测试文件 |
-| `pnpm test --watch src/services/api.test.ts` | 监听模式运行单个测试 |
-| `pnpm tauri dev` | 启动 Tauri 开发模式 |
-| `pnpm tauri build` | 构建 Tauri 安装包 |
-| `pnpm check` | 运行 Cargo 检查 (Rust) |
+| `pnpm install` | 安装所有子项目依赖 |
+| `pnpm --filter netunnel-desktop-tauri dev` | 启动桌面端开发服务器 |
+| `pnpm --filter netunnel-desktop-tauri build` | 构建桌面端生产版本 |
+| `pnpm --filter netunnel-desktop-tauri type-check` | TypeScript 类型检查 |
+| `pnpm --filter netunnel-desktop-tauri tauri dev` | 启动 Tauri 开发模式 |
+| `pnpm --filter netunnel-desktop-tauri tauri build` | 构建 Tauri 安装包 |
+
+### 版本号更新
+
+```bash
+cd src/netunnel-desktop-tauri
+node bump-version.cjs 2.12.6
+```
+
+这会自动更新：
+- `package.json` version
+- `src-tauri/tauri.conf.json` version
+- `src-tauri/Cargo.toml` version
+- `src-tauri/Cargo.lock` version
+
+然后手动更新根目录 `package.json` 的 version。
 
 ### Go 后端 (`src/netunnel-server/`)
 
@@ -129,7 +147,9 @@ internal/
 
 ## 环境变量
 
-桌面端使用 Vite，默认前缀 `VITE_` / `TAURI_`。
+桌面端使用 Vite，默认前缀 `VITE_` / `TAURI_`。关键环境变量：
+- `VITE_API_BASE_URL` — API 基础地址（默认 http://localhost:40061）
+- `VITE_WS_URL` — WebSocket 地址（默认 ws://localhost:40061）
 
 服务端使用环境变量或 `config.yaml`，关键变量:
 - `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`
@@ -176,3 +196,30 @@ go build -o server-run.exe ./cmd/server
 | 40061 | HTTP | API 服务端口 |
 | 40063 | HTTPS | HTTPS API 服务端口 |
 | 40062 | TCP | Agent Bridge 端口（TCP 隧道数据转发）|
+
+---
+
+## GitHub Release
+
+发布新版本流程：
+
+1. 确保所有代码已提交
+2. 在项目根目录运行：
+   ```bash
+   cd src/netunnel-desktop-tauri && node bump-version.cjs x.y.z
+   ```
+3. 更新根目录 `package.json` 的 version 字段
+4. 提交并推送：
+   ```bash
+   git add .
+   git commit -m "chore: bump version to x.y.z"
+   git push
+   git tag vx.y.z
+   git push origin vx.y.z
+   ```
+5. GitHub Actions 会自动触发 `release.yml` workflow，构建并发布 Release
+
+### 触发 Release 的方式
+
+- Push `v*.*.*` 格式的 tag（如 `git push origin v2.12.0`）
+- 或在 GitHub Actions 页面手动触发 `publish` workflow
