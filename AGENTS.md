@@ -223,3 +223,87 @@ go build -o server-run.exe ./cmd/server
 
 - Push `v*.*.*` 格式的 tag（如 `git push origin v2.12.0`）
 - 或在 GitHub Actions 页面手动触发 `publish` workflow
+
+---
+
+## 后端部署
+
+后端部署使用 `deploy/` 目录下的脚本，支持交叉编译 Linux 版本并上传到服务器。
+
+### 部署配置
+
+服务器信息在 `deploy/deploy.config.mjs` 中配置：
+
+```js
+ssh: {
+  host: '110.42.111.221',
+  port: 22,
+  username: 'root',
+  password: '你的服务器密码',
+}
+```
+
+### 首次服务器准备
+
+1. 复制服务文件到服务器：
+```bash
+sudo cp deploy/netunnel-server.service /etc/systemd/system/netunnel-server.service
+```
+
+2. 修改服务文件中的路径（如果部署目录不同）
+
+3. 创建目录：
+```bash
+sudo mkdir -p /www/wwwroot/netunnel/shared
+sudo mkdir -p /www/wwwroot/netunnel/releases
+```
+
+4. 启用服务：
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable netunnel-server
+```
+
+### 发布后端到服务器
+
+```bash
+node ./deploy/deploy.mjs --target backend
+```
+
+或：
+
+```bash
+pnpm run deploy:server -- --target backend
+```
+
+### 发布完成后检查
+
+```bash
+# 检查服务状态
+sudo systemctl status netunnel-server --no-pager
+
+# 查看日志
+sudo journalctl -u netunnel-server -n 100 --no-pager
+
+# 检查健康接口
+curl http://127.0.0.1:40061/healthz
+```
+
+### Nginx 配置
+
+项目对应的站点配置模板：`deploy/nginx/nps1.tx07.cn.conf`
+
+同步 Nginx 配置到服务器：
+
+```bash
+pnpm run sync:nginx:nps1
+```
+
+这会备份、上传新模板、测试配置并重载 Nginx。
+
+### 关键路径
+
+- 服务器配置文件：`/www/wwwroot/netunnel/shared/config.yaml`
+- 部署根目录：`/www/wwwroot/netunnel`
+- 当前版本链接：`/www/wwwroot/netunnel/current`
+- 配置文件：`.env.production` 中的 `VITE_API_BASE_URL` 需指向公网地址
