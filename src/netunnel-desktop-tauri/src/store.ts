@@ -149,7 +149,7 @@ function isLegacyLocalBridgeAddr(value: unknown) {
 }
 
 function migrateProductionHomeUrl(value: unknown) {
-  if (import.meta.env.MODE === 'production' && isLegacyLocalHomeUrl(value)) {
+  if ((import.meta.env.MODE === 'production' || import.meta.env.MODE === 'development') && isLegacyLocalHomeUrl(value)) {
     return runtimeEnv.defaultHomeUrl
   }
   return typeof value === 'string' ? value : undefined
@@ -566,7 +566,7 @@ export const useStore = defineStore('main', {
         this.updater.promptVisible = Boolean(update?.readyToInstall)
 
         if (update?.readyToInstall && options?.background) {
-          const message = `发现新版本 v${update.version}，可在设置中安装更新。`
+          const message = `更新已下载完成 v${update.version}，可在设置中直接安装。`
           if (!this.notifications.includes(message)) {
             this.notifications.unshift(message)
           }
@@ -628,7 +628,7 @@ export const useStore = defineStore('main', {
               readyToInstall: true,
             }
             this.updater.promptVisible = true
-            const message = `发现新版本 v${this.updater.available.version}，可在设置中安装更新。`
+            const message = `更新已下载完成 v${this.updater.available.version}，可在设置中直接安装。`
             if (!this.notifications.includes(message)) {
               this.notifications.unshift(message)
             }

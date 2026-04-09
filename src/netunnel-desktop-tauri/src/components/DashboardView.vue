@@ -873,14 +873,8 @@ watch(
       >
         <div class="flex items-start justify-between gap-4">
           <div class="space-y-1">
-            <p class="font-semibold text-emerald-600">发现新版本 v{{ store.updater.available.version }}</p>
-            <p class="text-[var(--text-soft)]">
-              {{
-                store.updater.available.readyToInstall
-                  ? '更新包已在后台准备完成，你现在可以直接安装，也可以稍后再处理。'
-                  : '系统正在后台下载更新包，下载完成后你可以直接安装。'
-              }}
-            </p>
+            <p class="font-semibold text-emerald-600">更新已下载完成 v{{ store.updater.available.version }}</p>
+            <p class="text-[var(--text-soft)]">你现在可以直接安装，也可以稍后再处理。</p>
           </div>
           <div class="flex items-center gap-2 shrink-0">
             <button class="nav-link nav-link--design" type="button" @click="store.openSettingsModal()">
