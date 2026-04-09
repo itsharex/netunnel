@@ -148,8 +148,8 @@ internal/
 ## 环境变量
 
 桌面端使用 Vite，默认前缀 `VITE_` / `TAURI_`。关键环境变量：
-- `VITE_API_BASE_URL` — API 基础地址（默认 http://localhost:40061）
-- `VITE_WS_URL` — WebSocket 地址（默认 ws://localhost:40061）
+- `VITE_DEFAULT_HOME_URL` — 桌面端默认服务地址（当前 `http://151.245.90.96:40061`）
+- `VITE_DEFAULT_BRIDGE_ADDR` — 桌面端默认 Bridge 地址（当前 `151.245.90.96:40062`）
 
 服务端使用环境变量或 `config.yaml`，关键变量:
 - `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`
@@ -236,7 +236,7 @@ go build -o server-run.exe ./cmd/server
 
 ```js
 ssh: {
-  host: '110.42.111.221',
+  host: '151.245.90.96',
   port: 22,
   username: 'root',
   password: '你的服务器密码',
@@ -291,7 +291,7 @@ curl http://127.0.0.1:40061/healthz
 
 ### Nginx 配置
 
-项目对应的站点配置模板：`deploy/nginx/nps1.tx07.cn.conf`
+项目对应的站点配置模板：`deploy/nginx/nps1.tx07.cn.conf`（旧域名模板，如继续使用 IP 直连可忽略）
 
 同步 Nginx 配置到服务器：
 
