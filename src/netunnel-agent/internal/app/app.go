@@ -14,15 +14,15 @@ import (
 type App struct {
 	cfg                config.Config
 	client             *control.Client
-	forward            *forwarder.BridgeManager
+	dataSession        *forwarder.DataSessionClient
 	lastConfigSnapshot string
 }
 
 func Bootstrap(cfg config.Config) (*App, error) {
 	return &App{
-		cfg:     cfg,
-		client:  control.NewClient(cfg.ServerURL),
-		forward: forwarder.NewBridgeManager(cfg.BridgeAddr),
+		cfg:         cfg,
+		client:      control.NewClient(cfg.ServerURL),
+		dataSession: forwarder.NewDataSessionClient(cfg.BridgeAddr),
 	}, nil
 }
 
@@ -46,6 +46,7 @@ func (a *App) Run(ctx context.Context) error {
 	if err := a.syncOnce(ctx, registerResp.Agent); err != nil {
 		log.Printf("initial config sync failed: %v", err)
 	}
+	go a.dataSession.Run(ctx)
 
 	for {
 		select {
@@ -71,12 +72,12 @@ func (a *App) syncOnce(ctx context.Context, agent control.Agent) error {
 		return err
 	}
 
-	a.forward.Sync(ctx, resp.Config.Agent, resp.Config.Tunnels)
+	a.dataSession.Update(resp.Config.Agent, resp.Config.Tunnels)
 
 	snapshotPayload := struct {
-		AgentID      string                              `json:"agent_id"`
-		Tunnels      []control.Tunnel                    `json:"tunnels"`
-		DomainRoutes map[string][]control.DomainRoute    `json:"domain_routes"`
+		AgentID      string                           `json:"agent_id"`
+		Tunnels      []control.Tunnel                 `json:"tunnels"`
+		DomainRoutes map[string][]control.DomainRoute `json:"domain_routes"`
 	}{
 		AgentID:      resp.Config.Agent.ID,
 		Tunnels:      resp.Config.Tunnels,

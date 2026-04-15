@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"netunnel/server/internal/domain"
@@ -22,7 +23,7 @@ import (
 )
 
 type bridgeAcquirer interface {
-	Acquire(ctx context.Context, tunnelID string) (net.Conn, error)
+	OpenDataStream(ctx context.Context, agentID, tunnelID string) (net.Conn, error)
 }
 
 type tunnelUsageRecorder interface {
@@ -42,7 +43,23 @@ type Server struct {
 	bridge           bridgeAcquirer
 	recorder         tunnelUsageRecorder
 	hostDomainSuffix string
+
+	mu                             sync.Mutex
+	httpTunnelActive               map[string]int
+	publicHTTPActive               int
+	publicHTTPLimitRejected        uint64
+	publicHTTPIdleTimeouts         uint64
+	publicHTTPDataStreamFailures   uint64
+	publicHTTPDataSessionSuccesses uint64
+	publicHTTPDataSessionFailures  uint64
+	summaryOnce                    sync.Once
 }
+
+const publicHTTPBridgeAcquireTimeout = 10 * time.Second
+const publicHTTPHeaderTimeout = 30 * time.Second
+const publicHTTPBodyIdleTimeout = 60 * time.Second
+const maxPublicHTTPPerTunnel = 32
+const publicHTTPSummaryInterval = 1 * time.Minute
 
 func NewServer(listenAddr string, hostDomainSuffix string, agentSvc *service.AgentService, userSvc *service.UserService, billingSvc *service.BillingService, paymentSvc *service.PaymentService, tunnelSvc *service.TunnelService, usageSvc *service.UsageService, dashboardSvc *service.DashboardService, bridge bridgeAcquirer, recorder tunnelUsageRecorder) *Server {
 	server := &Server{
@@ -56,6 +73,7 @@ func NewServer(listenAddr string, hostDomainSuffix string, agentSvc *service.Age
 		bridge:           bridge,
 		recorder:         recorder,
 		hostDomainSuffix: strings.TrimSpace(hostDomainSuffix),
+		httpTunnelActive: make(map[string]int),
 	}
 
 	mux := http.NewServeMux()
@@ -97,6 +115,9 @@ func NewServer(listenAddr string, hostDomainSuffix string, agentSvc *service.Age
 }
 
 func (s *Server) Start() error {
+	s.summaryOnce.Do(func() {
+		go s.logSummaries()
+	})
 	log.Printf("http api listening on %s", s.httpServer.Addr)
 	err := s.httpServer.ListenAndServe()
 	if errors.Is(err, http.ErrServerClosed) {
@@ -107,6 +128,31 @@ func (s *Server) Start() error {
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
+}
+
+func (s *Server) logSummaries() {
+	ticker := time.NewTicker(publicHTTPSummaryInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.logSummary()
+	}
+}
+
+func (s *Server) logSummary() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	log.Printf(
+		"public http summary: active=%d active_tunnels=%d data_session_successes=%d data_session_failures=%d limit_rejected=%d idle_timeouts=%d data_stream_failures=%d",
+		s.publicHTTPActive,
+		len(s.httpTunnelActive),
+		s.publicHTTPDataSessionSuccesses,
+		s.publicHTTPDataSessionFailures,
+		s.publicHTTPLimitRejected,
+		s.publicHTTPIdleTimeouts,
+		s.publicHTTPDataStreamFailures,
+	)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -908,18 +954,40 @@ func (s *Server) handlePublicHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	acquireCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	if !s.tryAcquireHTTPTunnelSlot(target.Tunnel.ID) {
+		s.mu.Lock()
+		s.publicHTTPLimitRejected++
+		s.mu.Unlock()
+		log.Printf("public http rejected by active limit: host=%s tunnel=%s limit=%d", host, target.Tunnel.ID, maxPublicHTTPPerTunnel)
+		writeError(w, http.StatusTooManyRequests, "too many active tunnel requests")
+		return
+	}
+	defer s.releaseHTTPTunnelSlot(target.Tunnel.ID)
+
+	acquireCtx, cancel := context.WithTimeout(r.Context(), publicHTTPBridgeAcquireTimeout)
 	defer cancel()
 
 	startedAt := time.Now()
-	bridgeConn, err := s.bridge.Acquire(acquireCtx, target.Tunnel.ID)
+	bridgeConn, err := s.bridge.OpenDataStream(acquireCtx, target.Tunnel.AgentID, target.Tunnel.ID)
 	if err != nil {
-		log.Printf("public http acquire failed: host=%s tunnel=%s took=%s err=%v", host, target.Tunnel.ID, time.Since(startedAt), err)
+		s.mu.Lock()
+		s.publicHTTPDataSessionFailures++
+		s.mu.Unlock()
+	} else {
+		s.mu.Lock()
+		s.publicHTTPDataSessionSuccesses++
+		s.mu.Unlock()
+	}
+	if err != nil {
+		s.mu.Lock()
+		s.publicHTTPDataStreamFailures++
+		s.mu.Unlock()
+		log.Printf("public http open data stream failed: host=%s tunnel=%s took=%s err=%v", host, target.Tunnel.ID, time.Since(startedAt), err)
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer bridgeConn.Close()
-	log.Printf("public http acquired bridge: host=%s tunnel=%s took=%s", host, target.Tunnel.ID, time.Since(startedAt))
+	log.Printf("public http opened data stream: host=%s tunnel=%s took=%s", host, target.Tunnel.ID, time.Since(startedAt))
 
 	connectionID := ""
 	if s.recorder != nil {
@@ -949,21 +1017,40 @@ func (s *Server) handlePublicHTTP(w http.ResponseWriter, r *http.Request) {
 	outReq.Host = requestHost(r.Host)
 	outReq.Header = r.Header.Clone()
 	outReq.Header.Set("Connection", "close")
+	_ = bridgeConn.SetWriteDeadline(time.Now().Add(publicHTTPHeaderTimeout))
 
 	if err := outReq.Write(bridgeConn); err != nil {
+		_ = bridgeConn.SetWriteDeadline(time.Time{})
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	_ = bridgeConn.SetWriteDeadline(time.Time{})
 	log.Printf("public http wrote request: host=%s tunnel=%s", host, target.Tunnel.ID)
 
-	_ = bridgeConn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	stopClosing := make(chan struct{})
+	go func() {
+		select {
+		case <-r.Context().Done():
+			_ = bridgeConn.Close()
+		case <-stopClosing:
+		}
+	}()
+	defer close(stopClosing)
+
+	_ = bridgeConn.SetReadDeadline(time.Now().Add(publicHTTPHeaderTimeout))
 	readStartedAt := time.Now()
 	resp, err := http.ReadResponse(bufio.NewReader(bridgeConn), outReq)
 	if err != nil {
+		if isHTTPNetTimeout(err) {
+			s.mu.Lock()
+			s.publicHTTPIdleTimeouts++
+			s.mu.Unlock()
+		}
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer resp.Body.Close()
+	_ = bridgeConn.SetReadDeadline(time.Time{})
 	log.Printf("public http read response headers: host=%s tunnel=%s status=%s took=%s", host, target.Tunnel.ID, resp.Status, time.Since(readStartedAt))
 
 	for key, values := range resp.Header {
@@ -972,7 +1059,15 @@ func (s *Server) handlePublicHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	copied, _ := io.Copy(w, resp.Body)
+	copied, copyErr := io.Copy(w, &idleTimeoutReader{conn: bridgeConn, reader: resp.Body, timeout: publicHTTPBodyIdleTimeout})
+	if copyErr != nil && !errors.Is(copyErr, context.Canceled) {
+		if isHTTPNetTimeout(copyErr) {
+			s.mu.Lock()
+			s.publicHTTPIdleTimeouts++
+			s.mu.Unlock()
+		}
+		log.Printf("public http copy body failed: host=%s tunnel=%s err=%v", host, target.Tunnel.ID, copyErr)
+	}
 	log.Printf("public http copied response body: host=%s tunnel=%s bytes=%d", host, target.Tunnel.ID, copied)
 
 	if s.recorder != nil && connectionID != "" {
@@ -994,6 +1089,59 @@ func (s *Server) handlePublicHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Printf("finish http tunnel connection failed: tunnel=%s err=%v", target.Tunnel.ID, err)
 		}
 	}
+}
+
+func (s *Server) tryAcquireHTTPTunnelSlot(tunnelID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	active := s.httpTunnelActive[tunnelID]
+	if active >= maxPublicHTTPPerTunnel {
+		return false
+	}
+	s.httpTunnelActive[tunnelID] = active + 1
+	s.publicHTTPActive++
+	return true
+}
+
+func (s *Server) releaseHTTPTunnelSlot(tunnelID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	active := s.httpTunnelActive[tunnelID] - 1
+	if active <= 0 {
+		delete(s.httpTunnelActive, tunnelID)
+	} else {
+		s.httpTunnelActive[tunnelID] = active
+	}
+	if s.publicHTTPActive > 0 {
+		s.publicHTTPActive--
+	}
+}
+
+type idleTimeoutReader struct {
+	conn    net.Conn
+	reader  io.Reader
+	timeout time.Duration
+}
+
+func (r *idleTimeoutReader) Read(p []byte) (int, error) {
+	if r.timeout > 0 {
+		_ = r.conn.SetReadDeadline(time.Now().Add(r.timeout))
+	}
+	n, err := r.reader.Read(p)
+	if err == io.EOF {
+		_ = r.conn.SetReadDeadline(time.Time{})
+	}
+	return n, err
+}
+
+func isHTTPNetTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	netErr, ok := err.(net.Error)
+	return ok && netErr.Timeout()
 }
 
 func requestHost(hostport string) string {

@@ -152,7 +152,7 @@ internal/
   - `VITE_DEFAULT_HOME_URL=http://127.0.0.1:40061`
   - `VITE_DEFAULT_BRIDGE_ADDR=127.0.0.1:40062`
 - 生产环境 `.env.production`：
-- `VITE_DEFAULT_HOME_URL` — 桌面端默认服务地址（当前临时使用 `http://101.43.49.100:40061`，待域名备案完成后再切回域名）
+- `VITE_DEFAULT_HOME_URL` — 桌面端默认服务地址（生产当前应为 `https://nps1.tx07.cn`）
 - `VITE_DEFAULT_BRIDGE_ADDR` — 桌面端默认 Bridge 地址（生产当前为 `101.43.49.100:40062`）
 
 服务端使用环境变量或 `config.yaml`，关键变量:
@@ -180,18 +180,14 @@ internal/
 
 #### 应该使用域名的位置
 
-当前临时策略：因为新服务器域名备案还没完成，API 先走 `http://101.43.49.100:40061`，域名内网穿透暂时不使用。下面这些域名位点保留到重新启用域名穿透时再切回。
-
 - `src/netunnel-desktop-tauri/.env.production` 的 `VITE_DEFAULT_HOME_URL`
   - 作用：桌面端默认 API / Web 入口
-  - 备案未完成期间当前值：`http://101.43.49.100:40061`
-  - 域名恢复后应切回：`https://nps1.tx07.cn`
+  - 当前值：`https://nps1.tx07.cn`
 - 服务端生产配置里的 `public_api_base_url`
   - 文件位置：线上实际生效文件是 `/www/wwwroot/netunnel/shared/config.yaml`
   - 仓库发布源文件：`src/netunnel-server/config.production.yaml`
   - 作用：服务端对外生成支付回调、平台访问基址等 HTTP API 地址
-  - 备案未完成期间当前值：`http://101.43.49.100:40061`
-  - 域名恢复后应切回：`https://nps1.tx07.cn`
+  - 当前值：`https://nps1.tx07.cn`
 - 服务端生产配置里的 `host_domain_suffix`
   - 文件位置：线上实际生效文件是 `/www/wwwroot/netunnel/shared/config.yaml`
   - 仓库发布源文件：`src/netunnel-server/config.production.yaml`
@@ -213,13 +209,13 @@ internal/
 1. 更新 `deploy/deploy.config.mjs` 的 `ssh.host`
 2. 更新 `src/netunnel-desktop-tauri/.env.production` 的 `VITE_DEFAULT_BRIDGE_ADDR`
 3. 更新服务端生产配置里的 `public_host`
-4. 若域名备案未完成，允许把 `VITE_DEFAULT_HOME_URL` 临时改为 `http://101.43.49.100:40061`
-5. 若域名备案未完成，允许把 `public_api_base_url` 临时改为 `http://101.43.49.100:40061`
+4. 保持 `VITE_DEFAULT_HOME_URL` 为公网域名
+5. 保持 `public_api_base_url` 为公网域名
 6. 保持 `host_domain_suffix` 为域名后缀，不要改成 IP
 7. 检查线上 `/www/wwwroot/netunnel/shared/config.yaml` 是否与预期一致
 8. 重启后端后验证：
    - `curl http://127.0.0.1:40061/api/v1/platform/config`
-   - `curl http://101.43.49.100:40061/api/v1/platform/config`
+   - `curl https://nps1.tx07.cn/api/v1/platform/config`
    - 两者都应返回 `{"host_domain_suffix":"nps1.tx07.cn"}`
 
 ---
@@ -254,6 +250,26 @@ go build -o server-run.exe ./cmd/server
 
 - 配置文件: `src/netunnel-server/config.yaml`
 - 端口范围: `tcp_port_ranges`（支持多组范围，如 40000-45000、50000-60000）
+
+### 数据面迁移状态
+
+- 当前 TCP 与 `http_host` 都已优先走 agent 级 `data session + substream`
+- 旧 bridge 已不再参与 TCP 与 `http_host` 的数据转发主链路
+
+### 数据面日志观察
+
+- 服务端 TCP：`tcp runtime summary`
+  - 重点看：`data_session_successes`、`data_session_failures`、`data_session_acquire_failures`
+- 服务端 data session：
+  - `data session summary`
+  - `data session counters`
+  - `data session per-agent streams`
+  - `data session per-tunnel streams`
+  - 重点看：`open_timeouts`、`overflow_closes`、各 tunnel 活跃 stream 是否长期高位
+- 服务端 HTTP：`public http summary`
+  - 重点看：`data_session_successes`、`data_session_failures`、`data_stream_failures`
+- Agent：`agent data session summary`
+  - 重点看：`retries`、`active_streams`、`open_failures`、`write_fail_closes`、`context_closes`
 
 ### 服务端口
 

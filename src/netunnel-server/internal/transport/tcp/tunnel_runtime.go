@@ -29,27 +29,35 @@ type Runtime struct {
 	recorder   usageRecorder
 	authorizer tunnelAuthorizer
 
-	mu        sync.Mutex
-	listeners map[string]net.Listener
+	mu                      sync.Mutex
+	listeners               map[string]net.Listener
+	tunnelActiveConnections map[string]int
 
-	activeConnections      int
-	totalAccepted          uint64
-	bridgeAcquireFailures  uint64
-	copyFailures           uint64
-	deniedConnections      uint64
-	summaryOnce            sync.Once
+	activeConnections          int
+	totalAccepted              uint64
+	dataSessionAcquireFailures uint64
+	dataSessionSuccesses       uint64
+	dataSessionFailures        uint64
+	copyFailures               uint64
+	deniedConnections          uint64
+	limitRejected              uint64
+	idleTimeoutCloses          uint64
+	summaryOnce                sync.Once
 }
 
 const runtimeSummaryInterval = 1 * time.Minute
 const connectionProgressFlushInterval = 15 * time.Second
+const tunnelIOIdleTimeout = 60 * time.Second
+const maxActiveConnectionsPerTunnel = 32
 
 func NewRuntime(ctx context.Context, bridge *BridgeManager, recorder usageRecorder, authorizer tunnelAuthorizer) *Runtime {
 	runtime := &Runtime{
-		ctx:        ctx,
-		bridge:     bridge,
-		recorder:   recorder,
-		authorizer: authorizer,
-		listeners:  make(map[string]net.Listener),
+		ctx:                     ctx,
+		bridge:                  bridge,
+		recorder:                recorder,
+		authorizer:              authorizer,
+		listeners:               make(map[string]net.Listener),
+		tunnelActiveConnections: make(map[string]int),
 	}
 	runtime.summaryOnce.Do(func() {
 		go runtime.logSummaries(ctx)
@@ -76,13 +84,17 @@ func (r *Runtime) logSummary() {
 	defer r.mu.Unlock()
 
 	log.Printf(
-		"tcp runtime summary: listeners=%d active_connections=%d accepted=%d bridge_acquire_failures=%d denied=%d copy_failures=%d",
+		"tcp runtime summary: listeners=%d active_connections=%d accepted=%d data_session_successes=%d data_session_failures=%d data_session_acquire_failures=%d denied=%d limit_rejected=%d copy_failures=%d idle_timeouts=%d",
 		len(r.listeners),
 		r.activeConnections,
 		r.totalAccepted,
-		r.bridgeAcquireFailures,
+		r.dataSessionSuccesses,
+		r.dataSessionFailures,
+		r.dataSessionAcquireFailures,
 		r.deniedConnections,
+		r.limitRejected,
 		r.copyFailures,
+		r.idleTimeoutCloses,
 	)
 }
 
@@ -164,6 +176,14 @@ func (r *Runtime) handleRemoteConn(ctx context.Context, tunnel domain.Tunnel, re
 	r.mu.Lock()
 	r.totalAccepted++
 	r.mu.Unlock()
+	if !r.tryAcquireTunnelSlot(tunnel.ID) {
+		r.mu.Lock()
+		r.limitRejected++
+		r.mu.Unlock()
+		log.Printf("tcp tunnel rejected by active limit: tunnel=%s limit=%d", tunnel.ID, maxActiveConnectionsPerTunnel)
+		return
+	}
+	defer r.releaseTunnelSlot(tunnel.ID)
 	r.changeActiveConnections(1)
 	defer r.changeActiveConnections(-1)
 
@@ -196,12 +216,21 @@ func (r *Runtime) handleRemoteConn(ctx context.Context, tunnel domain.Tunnel, re
 	acquireCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	bridgeConn, err := r.bridge.Acquire(acquireCtx, tunnel.ID)
+	bridgeConn, err := r.bridge.OpenDataStream(acquireCtx, tunnel.AgentID, tunnel.ID)
 	if err != nil {
 		r.mu.Lock()
-		r.bridgeAcquireFailures++
+		r.dataSessionFailures++
 		r.mu.Unlock()
-		log.Printf("acquire bridge failed: tunnel=%s err=%v", tunnel.ID, err)
+	} else {
+		r.mu.Lock()
+		r.dataSessionSuccesses++
+		r.mu.Unlock()
+	}
+	if err != nil {
+		r.mu.Lock()
+		r.dataSessionAcquireFailures++
+		r.mu.Unlock()
+		log.Printf("open data stream failed: tunnel=%s err=%v", tunnel.ID, err)
 		return
 	}
 	defer bridgeConn.Close()
@@ -213,6 +242,7 @@ func (r *Runtime) handleRemoteConn(ctx context.Context, tunnel domain.Tunnel, re
 	var ingressBytes atomic.Int64
 	var egressBytes atomic.Int64
 	resultCh := make(chan copyResult, 2)
+	stopClosing := make(chan struct{})
 
 	progressCtx, stopProgress := context.WithCancel(context.Background())
 	defer stopProgress()
@@ -221,11 +251,19 @@ func (r *Runtime) handleRemoteConn(ctx context.Context, tunnel domain.Tunnel, re
 	}
 
 	go func() {
-		written, err := io.Copy(bridgeConn, io.TeeReader(remoteConn, &atomicCounterWriter{counter: &ingressBytes}))
+		select {
+		case <-ctx.Done():
+			_ = bridgeConn.Close()
+			_ = remoteConn.Close()
+		case <-stopClosing:
+		}
+	}()
+	go func() {
+		written, err := copyConnWithIdleTimeout(bridgeConn, remoteConn, tunnelIOIdleTimeout, &ingressBytes)
 		resultCh <- copyResult{bytes: written, err: err}
 	}()
 	go func() {
-		written, err := io.Copy(remoteConn, io.TeeReader(bridgeConn, &atomicCounterWriter{counter: &egressBytes}))
+		written, err := copyConnWithIdleTimeout(remoteConn, bridgeConn, tunnelIOIdleTimeout, &egressBytes)
 		resultCh <- copyResult{bytes: written, err: err}
 	}()
 
@@ -233,7 +271,13 @@ func (r *Runtime) handleRemoteConn(ctx context.Context, tunnel domain.Tunnel, re
 	_ = bridgeConn.Close()
 	_ = remoteConn.Close()
 	second := <-resultCh
+	close(stopClosing)
 	stopProgress()
+	if isNetTimeout(first.err) || isNetTimeout(second.err) {
+		r.mu.Lock()
+		r.idleTimeoutCloses++
+		r.mu.Unlock()
+	}
 
 	if first.err != nil && first.err != io.EOF {
 		r.mu.Lock()
@@ -261,6 +305,69 @@ func (r *Runtime) handleRemoteConn(ctx context.Context, tunnel domain.Tunnel, re
 			log.Printf("finish tunnel connection failed: tunnel=%s err=%v", tunnel.ID, err)
 		}
 	}
+}
+
+func (r *Runtime) tryAcquireTunnelSlot(tunnelID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	active := r.tunnelActiveConnections[tunnelID]
+	if active >= maxActiveConnectionsPerTunnel {
+		return false
+	}
+	r.tunnelActiveConnections[tunnelID] = active + 1
+	return true
+}
+
+func (r *Runtime) releaseTunnelSlot(tunnelID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	active := r.tunnelActiveConnections[tunnelID] - 1
+	if active <= 0 {
+		delete(r.tunnelActiveConnections, tunnelID)
+		return
+	}
+	r.tunnelActiveConnections[tunnelID] = active
+}
+
+func copyConnWithIdleTimeout(dst net.Conn, src net.Conn, idleTimeout time.Duration, counter *atomic.Int64) (int64, error) {
+	buf := make([]byte, 32*1024)
+	var written int64
+
+	for {
+		if idleTimeout > 0 {
+			_ = src.SetReadDeadline(time.Now().Add(idleTimeout))
+		}
+		nr, readErr := src.Read(buf)
+		if nr > 0 {
+			if idleTimeout > 0 {
+				_ = dst.SetWriteDeadline(time.Now().Add(idleTimeout))
+			}
+			nw, writeErr := dst.Write(buf[:nr])
+			written += int64(nw)
+			if counter != nil && nw > 0 {
+				counter.Add(int64(nw))
+			}
+			if writeErr != nil {
+				return written, writeErr
+			}
+			if nw != nr {
+				return written, io.ErrShortWrite
+			}
+		}
+		if readErr != nil {
+			return written, readErr
+		}
+	}
+}
+
+func isNetTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	netErr, ok := err.(net.Error)
+	return ok && netErr.Timeout()
 }
 
 type atomicCounterWriter struct {
